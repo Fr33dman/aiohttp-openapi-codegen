@@ -1,0 +1,55 @@
+from aiohttp import web
+
+{{#imports}}{{import}}
+{{/imports}}
+
+routes = web.RouteTableDef()
+BASE_PATH = "{{contextPath}}"
+
+{{#operations}}
+{{#operation}}
+@routes.route('{{httpMethod}}', BASE_PATH + '{{{path}}}')
+async def {{operationId}}(request: web.Request) -> web.Response:
+    """{{summary}}{{^summary}}{{operationId}}{{/summary}}
+
+    {{notes}}
+    {{#allParams}}
+    :param {{paramName}}: {{description}}
+    {{/allParams}}
+    """
+    {{#pathParams}}
+    {{paramName}} = request.match_info.get('{{baseName}}')
+    {{/pathParams}}
+    {{#queryParams}}
+    {{paramName}} = request.rel_url.query.get('{{baseName}}')
+    {{/queryParams}}
+    {{#headerParams}}
+    {{paramName}} = request.headers.get('{{baseName}}')
+    {{/headerParams}}
+    {{#cookieParams}}
+    {{paramName}} = request.cookies.get('{{baseName}}')
+    {{/cookieParams}}
+    {{#bodyParam}}
+    {{paramName}} = None
+    if request.can_read_body:
+        try:
+            {{paramName}} = await request.json()
+        except ValueError:
+            {{paramName}} = await request.text()
+    {{/bodyParam}}
+    {{#formParams}}
+    {{#-first}}
+    form_data = await request.post()
+    {{/-first}}
+    {{paramName}} = form_data.get('{{baseName}}')
+    {{/formParams}}
+
+    return web.json_response({'detail': '{{operationId}} not implemented'}, status=501)
+
+
+{{/operation}}
+{{/operations}}
+
+
+def register_routes(app: web.Application) -> None:
+    app.add_routes(routes)

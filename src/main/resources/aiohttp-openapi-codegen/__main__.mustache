@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+
+from aiohttp import web
+from . import create_app
+
+
+def main() -> None:
+    app = create_app()
+    web.run_app(app, port={{serverPort}})
+
+
+if __name__ == '__main__':
+    main()

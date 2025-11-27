@@ -1,0 +1,24 @@
+from aiohttp import web
+{{#featureCORS}}
+import aiohttp_cors
+{{/featureCORS}}
+
+from .controllers import register_controllers
+
+
+def create_app() -> web.Application:
+    app = web.Application()
+    register_controllers(app)
+{{#featureCORS}}
+    cors = aiohttp_cors.setup(app, defaults={
+        "*": aiohttp_cors.ResourceOptions(
+            allow_credentials=True,
+            expose_headers="*",
+            allow_headers="*",
+        )
+    })
+    for route in list(app.router.routes()):
+        cors.add(route)
+{{/featureCORS}}
+    return app
+

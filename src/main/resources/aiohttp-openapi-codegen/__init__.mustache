@@ -1,0 +1,17 @@
+import importlib
+import pkgutil
+from aiohttp import web
+from typing import Callable, Optional
+
+
+def _iter_controller_modules():
+    for _, module_name, _ in pkgutil.iter_modules(__path__, __name__ + "."):
+        if module_name.endswith("_controller"):
+            yield importlib.import_module(module_name)
+
+
+def register_controllers(app: web.Application) -> None:
+    for module in _iter_controller_modules():
+        register: Optional[Callable[[web.Application], None]] = getattr(module, "register_routes", None)
+        if callable(register):
+            register(app)

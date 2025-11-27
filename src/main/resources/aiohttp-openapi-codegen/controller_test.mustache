@@ -1,0 +1,21 @@
+# coding: utf-8
+
+import pytest
+
+pytestmark = pytest.mark.asyncio
+
+{{#operations}}
+{{#operation}}
+{{#vendorExtensions.x-skip-test}}
+@pytest.mark.skip("{{reason}}")
+{{/vendorExtensions.x-skip-test}}
+async def test_{{operationId}}(client):
+    response = await client.request(
+        method='{{httpMethod}}',
+        path='{{contextPath}}{{{path}}}'{{#pathParams}}{{#-first}}.format({{/-first}}{{paramName}}={{{example}}}{{^-last}}, {{/-last}}{{#-last}}){{/-last}}{{/pathParams}}
+    )
+    assert response.status == 501
+
+
+{{/operation}}
+{{/operations}}
