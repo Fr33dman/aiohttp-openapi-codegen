@@ -9,17 +9,25 @@ import io.swagger.v3.oas.models.servers.ServerVariable;
 import java.io.File;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.commons.lang3.StringUtils;
 import org.openapitools.codegen.CliOption;
 import org.openapitools.codegen.CodegenConstants;
+import org.openapitools.codegen.CodegenModel;
+import org.openapitools.codegen.CodegenProperty;
 import org.openapitools.codegen.CodegenType;
 import org.openapitools.codegen.SupportingFile;
 import org.openapitools.codegen.languages.AbstractPythonCodegen;
+import org.openapitools.codegen.model.ModelMap;
+import org.openapitools.codegen.model.ModelsMap;
+import org.openapitools.codegen.model.OperationsMap;
 
 public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
 
@@ -102,6 +110,121 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
   @Override
   public String getHelp() {
     return "Generates a pure aiohttp server stub.";
+  }
+
+  @Override
+  public String toModelImport(String name) {
+    return toRelativeImport(super.toModelImport(name));
+  }
+
+  @Override
+  public OperationsMap postProcessOperationsWithModels(OperationsMap objs, List<ModelMap> allModels) {
+    OperationsMap processed = super.postProcessOperationsWithModels(objs, allModels);
+    adjustOperationImports(processed);
+    return processed;
+  }
+
+  private void adjustOperationImports(OperationsMap operationsMap) {
+    if (operationsMap == null) {
+      return;
+    }
+    List<Map<String, String>> imports = operationsMap.getImports();
+    if (imports == null) {
+      return;
+    }
+    for (Map<String, String> entry : imports) {
+      if (entry == null || !entry.containsKey("import")) {
+        continue;
+      }
+      entry.put("import", toRelativeImport(entry.get("import")));
+    }
+  }
+
+  @Override
+  public ModelsMap postProcessModels(ModelsMap objs) {
+    ModelsMap processed = super.postProcessModels(objs);
+    adjustModelImports(processed);
+    return processed;
+  }
+
+  private void adjustModelImports(ModelsMap modelsMap) {
+    if (modelsMap == null) {
+      return;
+    }
+    List<ModelMap> models = modelsMap.getModels();
+    if (models == null) {
+      return;
+    }
+    for (ModelMap modelMap : models) {
+      Object modelObj = modelMap.get("model");
+      if (!(modelObj instanceof CodegenModel)) {
+        continue;
+      }
+      CodegenModel model = (CodegenModel) modelObj;
+      populateModelImports(modelMap, model);
+      ensureForwardReferenceFriendlyTypes(model);
+    }
+  }
+
+  private void populateModelImports(ModelMap modelMap, CodegenModel model) {
+    if (model.imports == null || model.imports.isEmpty()) {
+      return;
+    }
+    List<Map<String, String>> imports = new ArrayList<>();
+    for (String dependency : model.imports) {
+      if (StringUtils.isBlank(dependency) || dependency.equals(model.classname)) {
+        continue;
+      }
+      Map<String, String> entry = new HashMap<>();
+      entry.put("import", "from ." + underscore(dependency) + " import " + dependency);
+      imports.add(entry);
+    }
+    if (!imports.isEmpty()) {
+      modelMap.put("pyImports", imports);
+    }
+  }
+
+  private void ensureForwardReferenceFriendlyTypes(CodegenModel model) {
+    if (model.vars == null) {
+      return;
+    }
+    for (CodegenProperty property : model.vars) {
+      property.dataType = quoteSelfReference(model.classname, property.dataType);
+      property.datatypeWithEnum = quoteSelfReference(model.classname, property.datatypeWithEnum);
+      property.baseType = quoteSelfReference(model.classname, property.baseType);
+      property.complexType = quoteSelfReference(model.classname, property.complexType);
+    }
+  }
+
+  private String quoteSelfReference(String className, String typeExpression) {
+    if (StringUtils.isBlank(typeExpression) || StringUtils.isBlank(className)) {
+      return typeExpression;
+    }
+    if (!typeExpression.contains(className)) {
+      return typeExpression;
+    }
+    String quoted = "'" + className + "'";
+    if (typeExpression.contains(quoted)) {
+      return typeExpression;
+    }
+    String pattern = "(?<![A-Za-z0-9_])" + Pattern.quote(className) + "(?![A-Za-z0-9_])";
+    return typeExpression.replaceAll(pattern, quoted);
+  }
+
+  private String toRelativeImport(String statement) {
+    if (StringUtils.isBlank(statement)) {
+      return statement;
+    }
+    String normalized = statement.replace(".models.", ".schemas.");
+    String modelPrefix = "from " + modelPackage + ".";
+    if (normalized.startsWith(modelPrefix)) {
+      return "from ..schemas." + normalized.substring(modelPrefix.length());
+    }
+    String rootPrefix = "from " + packageName + ".";
+    if (normalized.startsWith(rootPrefix)) {
+      return "from .." + normalized.substring(rootPrefix.length());
+    }
+    return normalized;
   }
 
   @Override
