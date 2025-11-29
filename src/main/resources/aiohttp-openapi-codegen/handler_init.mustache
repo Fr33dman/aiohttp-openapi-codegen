@@ -1,0 +1,19 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from .base import HandlerResponse, HandlerResult, JSONPayload
+{{#apiInfo.apis}}
+from .{{handlerModule}} import {{handlerClassName}}
+{{/apiInfo.apis}}
+
+
+@dataclass
+class ServerHandlers:
+{{#apiInfo.apis}}
+    {{handlerAttributeName}}: {{handlerClassName}} | None = None
+{{/apiInfo.apis}}
+
+
+__all__ = ("HandlerResponse", "HandlerResult", "JSONPayload", "ServerHandlers")
+

@@ -3,6 +3,8 @@ import pkgutil
 from aiohttp import web
 from typing import Callable, Optional
 
+from ..handlers import ServerHandlers
+
 
 def _iter_controller_modules():
     for _, module_name, _ in pkgutil.iter_modules(__path__, __name__ + "."):
@@ -10,8 +12,20 @@ def _iter_controller_modules():
             yield importlib.import_module(module_name)
 
 
-def register_controllers(app: web.Application) -> None:
+def register_controllers(app: web.Application, handlers: Optional[ServerHandlers] = None) -> ServerHandlers:
+    handlers = handlers or ServerHandlers()
     for module in _iter_controller_modules():
-        register: Optional[Callable[[web.Application], None]] = getattr(module, "register_routes", None)
-        if callable(register):
-            register(app)
+        register: Optional[Callable[..., None]] = getattr(module, "register_routes", None)
+        handler_attr = getattr(module, "HANDLER_ATTRIBUTE", None)
+        handler_cls = getattr(module, "HANDLER_CLASS", None)
+        handler = getattr(handlers, handler_attr, None) if handler_attr else None
+        if not callable(register):
+            continue
+        if handler_cls is None:
+            raise RuntimeError(f"Controller module {module.__name__} is missing HANDLER_CLASS.")
+        if handler is None:
+            raise RuntimeError(f"Handler '{handler_attr}' must be provided for controller {module.__name__}.")
+        if not isinstance(handler, handler_cls):
+            raise TypeError(f"Handler '{handler_attr}' must implement {handler_cls.__name__}.")
+        register(app, handler=handler)
+    return handlers

@@ -21,12 +21,16 @@ import org.apache.commons.lang3.StringUtils;
 import org.openapitools.codegen.CliOption;
 import org.openapitools.codegen.CodegenConstants;
 import org.openapitools.codegen.CodegenModel;
+import org.openapitools.codegen.CodegenOperation;
+import org.openapitools.codegen.CodegenParameter;
 import org.openapitools.codegen.CodegenProperty;
+import org.openapitools.codegen.CodegenResponse;
 import org.openapitools.codegen.CodegenType;
 import org.openapitools.codegen.SupportingFile;
 import org.openapitools.codegen.languages.AbstractPythonCodegen;
 import org.openapitools.codegen.model.ModelMap;
 import org.openapitools.codegen.model.ModelsMap;
+import org.openapitools.codegen.model.OperationMap;
 import org.openapitools.codegen.model.OperationsMap;
 
 public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
@@ -41,6 +45,7 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
   public static final String OPTION_FEATURE_CORS = "featureCORS";
   public static final String OPTION_GENERATOR_LANGUAGE_VERSION = "generatorLanguageVersion";
   public static final String OPTION_TESTS_ROOT = "testsRoot";
+  public static final String OPTION_HANDLER_PACKAGE = "handlerPackage";
 
   private String pythonSrcRoot = "";
   private String testsRoot = "tests";
@@ -54,6 +59,8 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
   private String schemasDir = "";
   private String testsDir = "";
   private String controllerTestsDir = "";
+  private String handlersDir = "";
+  private String handlerPackage = "";
 
   public AiohttpOpenapiCodegenGenerator() {
     super();
@@ -69,10 +76,13 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
     modelTemplateFiles.put("model.mustache", ".py");
 
     apiTemplateFiles.clear();
-    apiTemplateFiles.put("controller.mustache", ".py");
+    apiTemplateFiles.put("controller.mustache", "_controller.py");
 
     apiTestTemplateFiles.clear();
-    apiTestTemplateFiles.put("controller_test.mustache", ".py");
+    apiTestTemplateFiles.put("controller_test.mustache", "_controller_test.py");
+
+    apiDocTemplateFiles.clear();
+    apiDocTemplateFiles.put("handler.mustache", "_handler.py");
 
     cliOptions.add(new CliOption(CodegenConstants.PACKAGE_NAME, "Root python package name")
       .defaultValue(this.packageName));
@@ -95,6 +105,8 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
       .defaultValue(this.generatorLanguageVersion));
     cliOptions.add(new CliOption(OPTION_TESTS_ROOT, "Relative path where generated tests will be written")
       .defaultValue(this.testsRoot));
+    cliOptions.add(new CliOption(OPTION_HANDLER_PACKAGE, "Python package for generated handler interfaces")
+      .defaultValue(this.packageName + ".handlers"));
   }
 
   @Override
@@ -120,8 +132,60 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
   @Override
   public OperationsMap postProcessOperationsWithModels(OperationsMap objs, List<ModelMap> allModels) {
     OperationsMap processed = super.postProcessOperationsWithModels(objs, allModels);
+    annotateOperations(processed);
     adjustOperationImports(processed);
     return processed;
+  }
+
+  @SuppressWarnings("unchecked")
+  private void annotateOperations(OperationsMap operationsMap) {
+    if (operationsMap == null) {
+      return;
+    }
+    OperationMap operationMap = operationsMap.getOperations();
+    if (operationMap == null) {
+      return;
+    }
+    String classname = (String) operationMap.get("classname");
+    if (StringUtils.isBlank(classname)) {
+      return;
+    }
+    String handlerClassName = "I" + classname + "Handler";
+    String handlerModule = underscore(classname) + "_handler";
+    String handlerAttributeName = underscore(classname);
+    operationMap.put("handlerClassName", handlerClassName);
+    operationMap.put("handlerModule", handlerModule);
+    operationMap.put("handlerAttributeName", handlerAttributeName);
+    operationsMap.put("handlerClassName", handlerClassName);
+    operationsMap.put("handlerModule", handlerModule);
+    operationsMap.put("handlerAttributeName", handlerAttributeName);
+
+    Object opsObject = operationMap.get("operation");
+    if (!(opsObject instanceof List)) {
+      return;
+    }
+    List<CodegenOperation> operations = (List<CodegenOperation>) opsObject;
+    for (CodegenOperation operation : operations) {
+      annotateOperation(operation);
+    }
+  }
+
+  private void annotateOperation(CodegenOperation operation) {
+    if (operation == null) {
+      return;
+    }
+    if (operation.vendorExtensions == null) {
+      operation.vendorExtensions = new HashMap<>();
+    }
+    operation.vendorExtensions.put("x-handler-parameters", buildHandlerParameters(operation));
+    SuccessResponseMeta success = determineSuccessResponse(operation);
+    if (success != null) {
+      operation.vendorExtensions.put("x-success-status-code", success.statusCode);
+      if (StringUtils.isNotBlank(success.responseClass)) {
+        operation.vendorExtensions.put("x-success-response-class", success.responseClass);
+      }
+    }
+    operation.vendorExtensions.put("x-handler-result-type", resolveHandlerResultType(success));
   }
 
   private void adjustOperationImports(OperationsMap operationsMap) {
@@ -137,6 +201,94 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
         continue;
       }
       entry.put("import", toRelativeImport(entry.get("import")));
+    }
+  }
+
+  private List<Map<String, Object>> buildHandlerParameters(CodegenOperation operation) {
+    List<Map<String, Object>> params = new ArrayList<>();
+    addParameters(params, operation.pathParams, false);
+    addParameters(params, operation.queryParams, false);
+    addParameters(params, operation.headerParams, false);
+    addParameters(params, operation.cookieParams, false);
+    if (operation.bodyParam != null) {
+      params.add(toHandlerParam(operation.bodyParam, true));
+    }
+    return params;
+  }
+
+  private void addParameters(List<Map<String, Object>> target, List<CodegenParameter> source, boolean isBody) {
+    if (source == null) {
+      return;
+    }
+    for (CodegenParameter parameter : source) {
+      target.add(toHandlerParam(parameter, isBody));
+    }
+  }
+
+  private Map<String, Object> toHandlerParam(CodegenParameter parameter, boolean isBody) {
+    Map<String, Object> descriptor = new HashMap<>();
+    descriptor.put("paramName", parameter.paramName);
+    descriptor.put("pythonType", annotateParameterType(parameter));
+    descriptor.put("required", Boolean.TRUE.equals(parameter.required));
+    descriptor.put("description", parameter.description);
+    descriptor.put("isBody", isBody);
+    return descriptor;
+  }
+
+  private String annotateParameterType(CodegenParameter parameter) {
+    String type = parameter.dataType;
+    if (StringUtils.isBlank(type)) {
+      type = "Any";
+    }
+    boolean required = Boolean.TRUE.equals(parameter.required);
+    if (required) {
+      return type;
+    }
+    return type + " | None";
+  }
+
+  private SuccessResponseMeta determineSuccessResponse(CodegenOperation operation) {
+    if (operation == null) {
+      return null;
+    }
+    if (operation.responses != null) {
+      for (CodegenResponse response : operation.responses) {
+        if (response == null || StringUtils.isBlank(response.code) || !response.code.startsWith("2")) {
+          continue;
+        }
+        int status = parseStatusCode(response.code);
+        String responseClass = StringUtils.defaultIfBlank(response.baseType, operation.returnBaseType);
+        return new SuccessResponseMeta(status, responseClass);
+      }
+    }
+    if (StringUtils.isNotBlank(operation.returnBaseType)) {
+      return new SuccessResponseMeta(200, operation.returnBaseType);
+    }
+    return new SuccessResponseMeta(200, null);
+  }
+
+  private int parseStatusCode(String code) {
+    try {
+      return Integer.parseInt(code);
+    } catch (NumberFormatException ex) {
+      return 200;
+    }
+  }
+
+  private String resolveHandlerResultType(SuccessResponseMeta success) {
+    if (success != null && StringUtils.isNotBlank(success.responseClass)) {
+      return success.responseClass;
+    }
+    return "JSONPayload";
+  }
+
+  private static class SuccessResponseMeta {
+    private final int statusCode;
+    private final String responseClass;
+
+    private SuccessResponseMeta(int statusCode, String responseClass) {
+      this.statusCode = statusCode;
+      this.responseClass = responseClass;
     }
   }
 
@@ -229,7 +381,7 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
 
   @Override
   public String toApiFilename(String name) {
-    return super.toApiFilename(name) + "_controller";
+    return super.toApiFilename(name);
   }
 
   @Override
@@ -267,6 +419,8 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
     additionalProperties.put(OPTION_GENERATOR_LANGUAGE_VERSION, generatorLanguageVersion);
 
     configureInfoDefaults();
+    handlerPackage = resolveStringOpt(OPTION_HANDLER_PACKAGE, packageName + ".handlers");
+    additionalProperties.put(OPTION_HANDLER_PACKAGE, handlerPackage);
 
     determineLayout();
     supportingFiles.clear();
@@ -275,6 +429,8 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
     supportingFiles.add(new SupportingFile("typing_utils.mustache", packageRootDir, "typing_utils.py"));
     supportingFiles.add(new SupportingFile("util.mustache", packageRootDir, "util.py"));
     supportingFiles.add(new SupportingFile("__init__.mustache", controllersDir, "__init__.py"));
+    supportingFiles.add(new SupportingFile("handler_init.mustache", handlersDir, "__init__.py"));
+    supportingFiles.add(new SupportingFile("handler_base.mustache", handlersDir, "base.py"));
     supportingFiles.add(new SupportingFile("base_model.mustache", schemasDir, "base_model.py"));
     supportingFiles.add(new SupportingFile("__init__model.mustache", schemasDir, "__init__.py"));
     supportingFiles.add(new SupportingFile("conftest.mustache", testsDir, "conftest.py"));
@@ -516,6 +672,7 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
 
     schemasDir = joinPath(packageRootDir, "schemas");
     controllersDir = joinPath(packageRootDir, "controllers");
+    handlersDir = joinPath(packageRootDir, deriveRelativePackageDir(handlerPackage));
     testsDir = joinPath(packageRootDir, normalizeRelativePath(testsRoot));
     controllerTestsDir = joinPath(testsDir, "controllers");
   }
@@ -534,6 +691,21 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
     return outputFolder + File.separator + relative;
   }
 
+  private String deriveRelativePackageDir(String targetPackage) {
+    if (StringUtils.isBlank(targetPackage)) {
+      return "";
+    }
+    if (targetPackage.equals(packageName)) {
+      return "";
+    }
+    String normalized = targetPackage;
+    String prefix = packageName + ".";
+    if (targetPackage.startsWith(prefix)) {
+      normalized = targetPackage.substring(prefix.length());
+    }
+    return normalized.replace('.', File.separatorChar);
+  }
+
   @Override
   public String modelFileFolder() {
     return toOutputPath(schemasDir);
@@ -547,5 +719,15 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
   @Override
   public String apiTestFileFolder() {
     return toOutputPath(controllerTestsDir);
+  }
+
+  @Override
+  public String apiDocFileFolder() {
+    return toOutputPath(handlersDir);
+  }
+
+  @Override
+  public String toApiDocFilename(String name) {
+    return super.toApiFilename(name);
   }
 }

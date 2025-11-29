@@ -1,0 +1,29 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+
+from aiohttp import web
+
+from ..handlers.base import HandlerResult
+{{#imports}}{{import}}
+{{/imports}}
+
+
+class {{handlerClassName}}(ABC):
+{{#operations}}
+{{#operation}}
+    @abstractmethod
+    async def {{operationId}}(
+        self,
+        *,
+        request: web.Request{{#vendorExtensions.x-handler-parameters}},
+        {{paramName}}: {{{pythonType}}}{{^required}} = None{{/required}}{{/vendorExtensions.x-handler-parameters}}
+    ) -> HandlerResult[{{vendorExtensions.x-handler-result-type}}]:
+        """{{summary}}{{^summary}}{{operationId}}{{/summary}}
+
+        {{notes}}
+        """
+        raise NotImplementedError
+
+{{/operation}}
+{{/operations}}

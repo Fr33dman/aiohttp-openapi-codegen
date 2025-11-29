@@ -1,21 +1,69 @@
+from __future__ import annotations
+
+from typing import Any, Mapping
+
 from aiohttp import web
 
 {{#imports}}{{import}}
 {{/imports}}
+from ..handlers.base import HandlerResponse, HandlerResult, JSONPayload
+from ..handlers.{{handlerModule}} import {{handlerClassName}}
 
 routes = web.RouteTableDef()
 BASE_PATH = "{{contextPath}}"
+HANDLER_ATTRIBUTE = "{{handlerAttributeName}}"
+HANDLER_CLASS = {{handlerClassName}}
+_handler: {{handlerClassName}} | None = None
+
+
+def register_routes(app: web.Application, handler: {{handlerClassName}} | None = None) -> None:
+    if handler is None:
+        raise RuntimeError("Handler '{{handlerAttributeName}}' must be provided.")
+    if not isinstance(handler, {{handlerClassName}}):
+        raise TypeError("Handler '{{handlerAttributeName}}' must implement {{handlerClassName}}.")
+    global _handler
+    _handler = handler
+    app.add_routes(routes)
+
+
+def _get_handler() -> {{handlerClassName}}:
+    if _handler is None:
+        raise RuntimeError("Handler '{{handlerAttributeName}}' is not configured.")
+    return _handler
+
+
+def _to_aiohttp_response(
+    result: HandlerResult,
+    response_cls: type | None,
+    default_status: int,
+) -> web.StreamResponse:
+    body = result
+    status = default_status
+    headers: Mapping[str, str] | None = None
+    if isinstance(result, HandlerResponse):
+        body = result.body
+        status = result.status
+        headers = result.headers
+    if response_cls is not None and body is not None and not isinstance(body, response_cls):
+        if isinstance(body, dict):
+            body = response_cls.from_dict(body)
+        else:
+            raise TypeError(
+                f"Handler returned {type(body)!r}, expected {response_cls.__name__} or dict."
+            )
+    if body is None:
+        return web.Response(status=status, headers=headers)
+    payload = body.to_dict() if hasattr(body, "to_dict") else body
+    return web.json_response(payload, status=status, headers=headers)
+
 
 {{#operations}}
 {{#operation}}
 @routes.route('{{httpMethod}}', BASE_PATH + '{{{path}}}')
-async def {{operationId}}(request: web.Request) -> web.Response:
+async def {{operationId}}(request: web.Request) -> web.StreamResponse:
     """{{summary}}{{^summary}}{{operationId}}{{/summary}}
 
     {{notes}}
-    {{#allParams}}
-    :param {{paramName}}: {{description}}
-    {{/allParams}}
     """
     {{#pathParams}}
     {{paramName}} = request.match_info.get('{{baseName}}')
@@ -30,12 +78,20 @@ async def {{operationId}}(request: web.Request) -> web.Response:
     {{paramName}} = request.cookies.get('{{baseName}}')
     {{/cookieParams}}
     {{#bodyParam}}
-    {{paramName}} = None
+    raw_{{paramName}} = None
     if request.can_read_body:
         try:
-            {{paramName}} = await request.json()
+            raw_{{paramName}} = await request.json()
         except ValueError:
-            {{paramName}} = await request.text()
+            raw_{{paramName}} = await request.text()
+    {{paramName}} = None
+    if raw_{{paramName}} is not None:
+        {{#isModel}}
+        {{paramName}} = {{dataType}}.from_dict(raw_{{paramName}})
+        {{/isModel}}
+        {{^isModel}}
+        {{paramName}} = raw_{{paramName}}
+        {{/isModel}}
     {{/bodyParam}}
     {{#formParams}}
     {{#-first}}
@@ -44,12 +100,22 @@ async def {{operationId}}(request: web.Request) -> web.Response:
     {{paramName}} = form_data.get('{{baseName}}')
     {{/formParams}}
 
-    return web.json_response({'detail': '{{operationId}} not implemented'}, status=501)
+    handler = _get_handler()
+    result: HandlerResult[{{vendorExtensions.x-handler-result-type}}] = await handler.{{operationId}}(
+        request=request{{#vendorExtensions.x-handler-parameters}},
+        {{paramName}}={{paramName}}{{/vendorExtensions.x-handler-parameters}}
+    )
+    return _to_aiohttp_response(
+        result,
+    {{#vendorExtensions.x-success-response-class}}
+        response_cls={{.}},
+    {{/vendorExtensions.x-success-response-class}}
+    {{^vendorExtensions.x-success-response-class}}
+        response_cls=None,
+    {{/vendorExtensions.x-success-response-class}}
+        default_status={{vendorExtensions.x-success-status-code}}
+    )
 
 
 {{/operation}}
 {{/operations}}
-
-
-def register_routes(app: web.Application) -> None:
-    app.add_routes(routes)

@@ -1,0 +1,22 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Generic, Mapping, TypeAlias, TypeVar, Union
+
+
+JSONPayload = Union[dict[str, Any], list[Any], str, int, float, bool, None]
+PayloadT = TypeVar("PayloadT")
+
+
+@dataclass
+class HandlerResponse(Generic[PayloadT]):
+    body: PayloadT | JSONPayload | None = None
+    status: int = 200
+    headers: Mapping[str, str] | None = None
+
+
+HandlerResult: TypeAlias = Union[HandlerResponse[PayloadT], PayloadT, JSONPayload, None]
+
+
+__all__ = ("HandlerResponse", "HandlerResult", "JSONPayload")
+

@@ -1,14 +1,16 @@
 from aiohttp import web
+from aiohttp.typedefs import Middleware
 {{#featureCORS}}
 import aiohttp_cors
 {{/featureCORS}}
 
 from .controllers import register_controllers
+from .handlers import ServerHandlers
 
 
-def create_app() -> web.Application:
-    app = web.Application()
-    register_controllers(app)
+def create_app(handlers: ServerHandlers | None = None, middlewares: list[Middleware] | None = None) -> web.Application:
+    app = web.Application(middlewares=middlewares)
+    register_controllers(app, handlers)
 {{#featureCORS}}
     cors = aiohttp_cors.setup(app, defaults={
         "*": aiohttp_cors.ResourceOptions(
