@@ -67,6 +67,26 @@ async def {{operationId}}(request: web.Request) -> web.StreamResponse:
     """
     {{#pathParams}}
     {{paramName}} = request.match_info.get('{{baseName}}')
+    {{#isInteger}}
+    if {{paramName}} is not None:
+        {{paramName}} = int({{paramName}})
+    {{/isInteger}}
+    {{#isLong}}
+    if {{paramName}} is not None:
+        {{paramName}} = int({{paramName}})
+    {{/isLong}}
+    {{#isFloat}}
+    if {{paramName}} is not None:
+        {{paramName}} = float({{paramName}})
+    {{/isFloat}}
+    {{#isDouble}}
+    if {{paramName}} is not None:
+        {{paramName}} = float({{paramName}})
+    {{/isDouble}}
+    {{#isBoolean}}
+    if {{paramName}} is not None:
+        {{paramName}} = {{paramName}}.lower() in ('true', '1')
+    {{/isBoolean}}
     {{/pathParams}}
     {{#queryParams}}
     {{paramName}} = request.rel_url.query.get('{{baseName}}')
