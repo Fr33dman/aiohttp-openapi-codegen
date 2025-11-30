@@ -6,7 +6,7 @@ from aiohttp import web
 
 {{#imports}}{{import}}
 {{/imports}}
-from ..handlers.base import HandlerResponse, HandlerResult, JSONPayload
+from ..handlers.base import HandlerResponse, HandlerResult
 from ..handlers.{{handlerModule}} import {{handlerClassName}}
 
 routes = web.RouteTableDef()
@@ -32,29 +32,42 @@ def _get_handler() -> {{handlerClassName}}:
     return _handler
 
 
+def _identify_response_variant(
+    body: Any,
+    variants: list[tuple[type, int]],
+) -> tuple[type | None, int | None]:
+    for cls, status_code in variants:
+        if isinstance(body, cls):
+            return cls, status_code
+    return None, None
+
+
 def _to_aiohttp_response(
-    result: HandlerResult,
-    response_cls: type | None,
+    result: HandlerResult[Any],
+    *,
+    response_variants: list[tuple[type, int]],
     default_status: int,
+    default_response_cls: type | None,
 ) -> web.StreamResponse:
     body = result
-    status = default_status
+    explicit_status = None
     headers: Mapping[str, str] | None = None
     if isinstance(result, HandlerResponse):
         body = result.body
-        status = result.status
+        explicit_status = result.status
         headers = result.headers
-    if response_cls is not None and body is not None and not isinstance(body, response_cls):
-        if isinstance(body, dict):
-            body = response_cls.from_dict(body)
-        else:
-            raise TypeError(
-                f"Handler returned {type(body)!r}, expected {response_cls.__name__} or dict."
-            )
     if body is None:
-        return web.Response(status=status, headers=headers)
+        return web.Response(status=explicit_status or default_status, headers=headers)
+    matched_cls, matched_status = _identify_response_variant(body, response_variants)
+    if isinstance(body, dict):
+        target_cls = matched_cls or default_response_cls
+        if target_cls is not None:
+            body = target_cls.from_dict(body)
+            if matched_cls is None:
+                matched_cls = target_cls
     payload = body.to_dict() if hasattr(body, "to_dict") else body
-    return web.json_response(payload, status=status, headers=headers)
+    final_status = explicit_status or matched_status or default_status
+    return web.json_response(payload, status=final_status, headers=headers)
 
 
 {{#operations}}
@@ -65,6 +78,11 @@ async def {{operationId}}(request: web.Request) -> web.StreamResponse:
 
     {{notes}}
     """
+    response_variants = [
+{{#vendorExtensions.x-response-variants}}
+        ({{responseClass}}, {{statusCode}}),
+{{/vendorExtensions.x-response-variants}}
+    ]
     {{#pathParams}}
     {{paramName}} = request.match_info.get('{{baseName}}')
     {{#isInteger}}
@@ -127,13 +145,14 @@ async def {{operationId}}(request: web.Request) -> web.StreamResponse:
     )
     return _to_aiohttp_response(
         result,
-    {{#vendorExtensions.x-success-response-class}}
-        response_cls={{.}},
-    {{/vendorExtensions.x-success-response-class}}
-    {{^vendorExtensions.x-success-response-class}}
-        response_cls=None,
-    {{/vendorExtensions.x-success-response-class}}
-        default_status={{vendorExtensions.x-success-status-code}}
+        response_variants=response_variants,
+        default_status={{vendorExtensions.x-default-status-code}},
+{{#vendorExtensions.x-default-response-class}}
+        default_response_cls={{.}},
+{{/vendorExtensions.x-default-response-class}}
+{{^vendorExtensions.x-default-response-class}}
+        default_response_cls=None,
+{{/vendorExtensions.x-default-response-class}}
     )
 
 

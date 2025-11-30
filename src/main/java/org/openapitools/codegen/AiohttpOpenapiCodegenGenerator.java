@@ -12,6 +12,7 @@ import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -166,17 +167,18 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
     }
     List<CodegenOperation> operations = (List<CodegenOperation>) opsObject;
     for (CodegenOperation operation : operations) {
-      annotateOperation(operation);
+      annotateOperation(operationsMap, operation);
     }
   }
 
-  private void annotateOperation(CodegenOperation operation) {
+  private void annotateOperation(OperationsMap operationsMap, CodegenOperation operation) {
     if (operation == null) {
       return;
     }
     if (operation.vendorExtensions == null) {
       operation.vendorExtensions = new HashMap<>();
     }
+    List<ResponseVariant> variants = buildResponseVariants(operation);
     operation.vendorExtensions.put("x-handler-parameters", buildHandlerParameters(operation));
     SuccessResponseMeta success = determineSuccessResponse(operation);
     if (success != null) {
@@ -185,7 +187,15 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
         operation.vendorExtensions.put("x-success-response-class", success.responseClass);
       }
     }
-    operation.vendorExtensions.put("x-handler-result-type", resolveHandlerResultType(success));
+    if (!variants.isEmpty()) {
+      operation.vendorExtensions.put("x-response-variants", toVariantMaps(variants));
+    }
+    operation.vendorExtensions.put("x-handler-result-type", resolveHandlerResultType(variants));
+    operation.vendorExtensions.put("x-default-status-code", success != null ? success.statusCode : 200);
+    if (success != null && StringUtils.isNotBlank(success.responseClass)) {
+      operation.vendorExtensions.put("x-default-response-class", success.responseClass);
+    }
+    registerResponseImports(operationsMap, variants);
   }
 
   private void adjustOperationImports(OperationsMap operationsMap) {
@@ -275,11 +285,74 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
     }
   }
 
-  private String resolveHandlerResultType(SuccessResponseMeta success) {
-    if (success != null && StringUtils.isNotBlank(success.responseClass)) {
-      return success.responseClass;
+  private String resolveHandlerResultType(List<ResponseVariant> variants) {
+    LinkedHashSet<String> types = new LinkedHashSet<>();
+    for (ResponseVariant variant : variants) {
+      if (StringUtils.isNotBlank(variant.responseClass)) {
+        types.add(variant.responseClass);
+      }
     }
-    return "JSONPayload";
+    return String.join(" | ", types);
+  }
+
+  private List<ResponseVariant> buildResponseVariants(CodegenOperation operation) {
+    List<ResponseVariant> variants = new ArrayList<>();
+    if (operation.responses == null) {
+      return variants;
+    }
+    for (CodegenResponse response : operation.responses) {
+      if (response == null || StringUtils.isBlank(response.baseType)) {
+        continue;
+      }
+      variants.add(new ResponseVariant(parseStatusCode(response.code), response.baseType));
+    }
+    return variants;
+  }
+
+  private List<Map<String, Object>> toVariantMaps(List<ResponseVariant> variants) {
+    List<Map<String, Object>> result = new ArrayList<>();
+    for (ResponseVariant variant : variants) {
+      if (StringUtils.isBlank(variant.responseClass)) {
+        continue;
+      }
+      Map<String, Object> entry = new HashMap<>();
+      entry.put("statusCode", variant.statusCode);
+      entry.put("responseClass", variant.responseClass);
+      result.add(entry);
+    }
+    return result;
+  }
+
+  private void registerResponseImports(OperationsMap operationsMap, List<ResponseVariant> variants) {
+    if (operationsMap == null || variants == null || variants.isEmpty()) {
+      return;
+    }
+    List<Map<String, String>> imports = operationsMap.getImports();
+    if (imports == null) {
+      imports = new ArrayList<>();
+      operationsMap.setImports(imports);
+    }
+    for (ResponseVariant variant : variants) {
+      if (StringUtils.isBlank(variant.responseClass)) {
+        continue;
+      }
+      String importLine = toRelativeImport(String.format("from %s.%s import %s",
+        modelPackage,
+        underscore(variant.responseClass),
+        variant.responseClass));
+      ensureImport(imports, importLine);
+    }
+  }
+
+  private void ensureImport(List<Map<String, String>> imports, String importLine) {
+    for (Map<String, String> existing : imports) {
+      if (existing != null && importLine.equals(existing.get("import"))) {
+        return;
+      }
+    }
+    Map<String, String> entry = new HashMap<>();
+    entry.put("import", importLine);
+    imports.add(entry);
   }
 
   private static class SuccessResponseMeta {
@@ -287,6 +360,16 @@ public class AiohttpOpenapiCodegenGenerator extends AbstractPythonCodegen {
     private final String responseClass;
 
     private SuccessResponseMeta(int statusCode, String responseClass) {
+      this.statusCode = statusCode;
+      this.responseClass = responseClass;
+    }
+  }
+
+  private static class ResponseVariant {
+    private final int statusCode;
+    private final String responseClass;
+
+    private ResponseVariant(int statusCode, String responseClass) {
       this.statusCode = statusCode;
       this.responseClass = responseClass;
     }
